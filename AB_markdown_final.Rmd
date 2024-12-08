@@ -1,0 +1,349 @@
+---
+title: "AB test results"
+output:
+  word_document: default
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+> > > > > > > > > > > > > > > > > > > >**Requested by**: 
+
+> > > > > > > > > > > > > > > > > > > >**Created by**:  
+
+> > > > > > > > > > > > > > > > > > > >**Date requested**:  
+
+> > > > > > > > > > > > > > > > > > > >**Deadline**: 
+ 
+
+# Introduction
+The general introduction of the specific AB test will be placed here to put the readers into context.
+
+
+# Technical note
+```{r, include=FALSE}
+library(tidyverse)
+library("RODBC")
+library("DBI")
+library(sandwich)
+library(lmtest)
+library(plm)  # For fixed effects and random effects models
+
+```
+
+```{r, include=FALSE}
+n <- 200 # DELETE FROM THE FINAL!!!! - check if it needs to be used for standard error5s!!!
+case <- "case_3"
+required_significance <- 0.05
+dependent_var <- "crd_spent"
+indep_vars <- "" # "+ extra_var1 + extra_var2"
+use_fe <- FALSE  # Set to TRUE to use Fixed Effects, FALSE to use Random Effects
+
+# Description
+sandbox_name <- "latin_america_request"
+server_name <- "IMS"
+case_desc <- if (case == 'case_1') {
+            "only new members were AB tested"
+            } else if (case == 'case_2') {
+            "existing members were tested **without randomization**"
+            } else {
+            "existing members were tested **with randomization**"
+            }
+
+panel_desc <- if (case != 'case_1') {
+              if (use_fe) {
+                "Moreover, we corrected for the latent effect of time-invariant features, like salary and age, using a **fixed effects** transformation on our data."
+              } else {
+                "Moreover, we corrected for the latent effect of time-invariant features, like salary and age, using a **random effects** transformation on our data."
+              }
+            } else {
+              ""
+            }
+```
+
+
+
+```{r, include=FALSE}
+dbconnect <- odbcConnect("SERVER_2")
+
+sql_query <- "
+SELECT mbr_id, crd_spent, AB, during_test
+FROM [SANDBOX].[dbo].[Pro_Membership_AB1] WITH(NOLOCK)
+
+UNION ALL
+
+SELECT mbr_id, crd_spent, AB, during_test
+FROM [SANDBOX].[dbo].[Pro_Membership_AB3] WITH(NOLOCK);
+"
+
+# Execute query and pull data
+data <- sqlQuery(dbconnect, sql_query)
+
+# Close the connection
+odbcClose(dbconnect)
+```
+
+
+
+
+
+
+Necessary packages like tidyverse, sandwich, lmtest, and plm are imported. The latter three are used to create the needed statistical tests and regressions. Data was imported from the **`r sandbox_name`** sandbox from the **`r server_name`** server. We have **`r if(case == "case_1") { nrow(data) } else { nrow(data) / 2 }`** observations of which **`r if(case == "case_1") { sum(data$AB == 1) } else { sum(data$AB == 1) / 2 }`** were treated.
+
+
+
+
+We conducted a **`r case`** type of research, meaning `r case_desc`. Based on the data structure, the appropriate statistical processes had been used. The variable of our interest was **`r dependent_var`** and we analysed its change as a reaction to the test. In all cases, we used robust standard errors to control for the effect of potential influential data points (i.e. whales). In all cases, we used a **`r toString(required_significance*100)`%** significance level in our statistical tests.
+
+`r panel_desc`
+
+
+
+
+
+
+```{r, include=FALSE}
+# Create the initial part of the regression formula by case
+if (case == "case_1") {
+  selected_data <- data[, setdiff(colnames(data), c("during_test"))]
+  initial_formula_string <- paste(dependent_var, "~ AB")
+} else if (case == "case_2") {
+  selected_data <- data[, setdiff(colnames(data), c("AB"))]
+  initial_formula_string <- paste(dependent_var, "~ during_test")
+} else if (case == "case_3") {
+  selected_data <- data[, colnames(data)]
+  initial_formula_string <- paste(dependent_var, "~ during_test * AB")
+} else {
+  stop("Invalid case. Please choose 'case_1', 'case_2', or 'case_3'.")
+}
+
+# Add the independent variables to the formula
+formula <- as.formula(paste(initial_formula_string, indep_vars))
+
+# Remove unnecessary df to save memory
+rm(data)
+```
+
+\newpage
+# Results
+```{r, echo=FALSE, results='asis'}
+if (case == "case_1") {
+  # Perform the regression for case_1
+  model <- lm(formula, data = selected_data)
+  
+  # Get robust standard errors and insert them into the model
+  robust_se <- coeftest(model, vcov = vcovHC(model, type = "HC3"))
+  
+  # Extract coefficients and robust standard errors
+  coefficients <- coef(robust_se)
+  p_values <- robust_se[, 4]
+  robust_std_errors <- sqrt(diag(vcovHC(model, type = "HC3")))
+  
+  # Calculate critical value for confidence intervals
+  alpha <- required_significance
+  df_residual <- model$df.residual
+  t_value <- qt(1 - alpha / 2, df_residual)
+  
+  # Calculate predicted values and confidence intervals for control and treatment groups
+  predicted_control <- coefficients[1]
+  predicted_treatment <- coefficients[1] + coefficients[2]
+  ci_control <- c(
+    predicted_control - t_value * robust_std_errors[1],
+    predicted_control + t_value * robust_std_errors[1]
+  )
+  ci_treatment <- c(
+    predicted_treatment - t_value * robust_std_errors[2],
+    predicted_treatment + t_value * robust_std_errors[2]
+  )
+  
+  # Create a data frame for the dynamite plot
+  dynamite_data <- data.frame(
+    Group = c("Control", "Treatment"),
+    crd_spent = c(predicted_control, predicted_treatment),
+    lower = c(ci_control[1], ci_treatment[1]),
+    upper = c(ci_control[2], ci_treatment[2])
+  )
+  
+  # Print the explanation
+  cat('The figure compares the treated group to those who were not in the randomly selected AB test group (i.e. the control). The error bars indicate a statistically estimated uncertainty of the averages computed within the two categories. This means that if we were to repeat the study, we would potentially calculate averages within the range indicated by the error bars. If the error bars overlap horizontally, we conclude that the intervention had no effect, and the visible difference is only by chance.')
+  cat("\n\n")
+  
+  # Create the dynamite plot
+  graph <- ggplot(dynamite_data, aes(x = Group, y = crd_spent, fill = Group)) +
+    geom_bar(stat = "identity", position = position_dodge(width = 0.3), width = 0.4, alpha = 0.8) +
+    geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.1, position = position_dodge(0.3)) +
+    theme_bw() +
+    labs(y = "Average Credit Spent") +
+    scale_fill_manual(values = c("lightgrey", "lightgrey")) +
+    theme(legend.position = "none")
+  
+  print(graph)
+  
+  # Summary for management
+  if (p_values[2] < required_significance) {
+    message <- paste(
+      "**Result**: The analysis indicates a significant effect of the treatment on the ", dependent_var, " variable.",
+      "The treatment increases the average  ", dependent_var, " by", round(coefficients[2], 2), "units."
+    )
+  } else {
+    message <- paste(
+    "**Result**: The analysis indicates no significant effect of the treatment on the ", dependent_var, " variable, since the error bars overlap."
+  )
+  }
+  
+  # Print the summary message
+  cat("\n\n")
+  cat(message)
+  
+  # Remove unnecessary variables
+  rm(model, robust_se, coefficients, p_values, robust_std_errors, 
+     predicted_control, predicted_treatment, 
+     ci_control, ci_treatment, dynamite_data, graph, message)
+}
+```
+
+
+```{r, echo=FALSE, results='asis'}
+if (case == "case_2") {
+  # Perform the regression for case_2 with Fixed or Random Effects
+  if (use_fe) {
+    model <- plm(formula, data = selected_data, index = "mbr_id", model = "within")
+  } else {
+    model <- plm(formula, data = selected_data, index = "mbr_id", model = "random")
+  }
+  
+  # Get robust standard errors and insert them into the model
+  robust_se <- coeftest(model, vcov = vcovHC(model, type = "HC3"))
+  
+  # Extract coefficients and robust standard errors
+  coefficients <- robust_se[, "Estimate"]
+  p_values <- robust_se[, "Pr(>|t|)"]
+  robust_std_errors <- robust_se[, "Std. Error"]
+  
+  # Calculate critical value for confidence intervals
+  alpha <- required_significance
+  df_residual <- model$df.residual
+  t_value <- qt(1 - alpha / 2, df_residual)
+  
+  # Calculate predicted values and confidence intervals for before and after intervention
+  predicted_before <- coefficients["(Intercept)"]
+  predicted_after <- coefficients["(Intercept)"] + coefficients["during_test"]
+  ci_before <- c(
+    predicted_before - t_value * robust_std_errors["(Intercept)"],
+    predicted_before + t_value * robust_std_errors["(Intercept)"]
+  )
+  ci_after <- c(
+    predicted_after - t_value * robust_std_errors["during_test"],
+    predicted_after + t_value * robust_std_errors["during_test"]
+  )
+  
+  # Create a data frame for the dynamite plot
+  dynamite_data <- data.frame(
+    Group = factor(c("Before", "After"), levels = c("Before", "After")),
+    crd_spent = c(predicted_before, predicted_after),
+    lower = c(ci_before[1], ci_after[1]),
+    upper = c(ci_before[2], ci_after[2])
+  )
+  # Print the explanation
+  cat('The figure compares the period before the intervention to the period after the intervention. The error bars indicate a statistically estimated uncertainty of the averages computed within the two periods. This means that if we were to repeat the study, we would potentially calculate averages within the range indicated by the error bars. If the error bars overlap horizontally, we conclude that the intervention had no effect, and the visible difference is only by chance.')
+  cat("\n\n")
+  
+  # Create the dynamite plot
+  graph <- ggplot(dynamite_data, aes(x = Group, y = crd_spent, fill = Group)) +
+    geom_bar(stat = "identity", width = 0.4, alpha = 0.8) +
+    geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.1) +
+    theme_bw() +
+    labs(y = "Average Credit Spent") +
+    scale_fill_manual(values = c("lightgrey", "lightgrey")) +
+    theme(legend.position = "none")
+  
+  print(graph)
+  
+  # Summary for management
+  if (p_values["during_test"] < required_significance) {
+    message <- paste(
+      "**Result**: The analysis indicates a significant effect of the treatment on the ", dependent_var, "variable.",
+      "The treatment increases the average ", dependent_var, " by", round(coefficients["during_test"], 2), "units."
+    )
+  } else {
+    message <- paste(
+    "**Result**: The analysis indicates no significant effect of the change on the ", dependent_var, " variable, since the error bars overlap."
+  )
+  }
+  
+  # Print the summary message
+  cat("\n\n")
+  cat(message)
+  
+  # Remove unnecessary variables
+  rm(model, robust_se, coefficients, p_values, robust_std_errors, 
+     predicted_before, predicted_after, ci_before, ci_after, 
+     dynamite_data, graph, message)
+}
+
+```
+
+
+```{r, echo=FALSE, results='asis'}
+if (case == "case_3") {
+  if (use_fe) {
+    model <- plm(formula, data = selected_data, index = "mbr_id", model = "within")
+  } else {
+    model <- plm(formula, data = selected_data, index = "mbr_id", model = "random")
+  }
+  
+  robust_se <- coeftest(model, vcov = vcovHC(model, type = "HC3"))
+  
+  cat('The key parameter to observe here is the interaction term "during_test:AB". This term represents the causal effect of the treatment over time. To determine if this effect is statistically significant, we look at the p-value associated with this interaction term. If the p-value is lower than the threshold we set at the beginning of the analysis (', required_significance, '), we conclude that the treatment has a significant effect. If the p-value is higher than this threshold, it indicates that the observed effect could be due to chance, and we cannot confidently say that the treatment had an effect.')
+  cat("\n\n")
+  
+  print(knitr::kable(as.data.frame.matrix(robust_se), col.names = c("Estimate", "Std. Error", "t value", "Pr(>|t|)")))
+
+  p_values <- robust_se[, "Pr(>|t|)"]
+  
+  coefficients <- robust_se[, "Estimate"]
+  
+  beta_0 <- coefficients["(Intercept)"]
+  beta_1 <- coefficients["AB"]
+  beta_2 <- coefficients["during_test"]
+  beta_3 <- coefficients["during_test:AB"]
+  
+  control_before <- beta_0
+  control_after <- beta_0 + beta_2
+  treated_before <- beta_0 + beta_1
+  treated_after <- beta_0 + beta_1 + beta_2 + beta_3
+  
+  param_table <- data.frame(
+    Condition = c("Before", "After"),
+    Control = c(control_before, control_after),
+    Treated = c(treated_before, treated_after)
+  )
+  
+  # Print the table using knitr::kable
+  print(knitr::kable(param_table, col.names = c("Condition", "Control Group", "Treated Group")))
+  
+if (p_values["during_test:AB"] < required_significance) {
+  message <- paste(
+    "**Result**: The analysis indicates a significant interaction effect of the treatment and time on the", dependent_var, "variable.",
+    "The interaction effect increases the average", dependent_var, "by", round(coefficients["during_test:AB"], 2), "units."
+  )
+} else {
+  message <- paste(
+    "**Result**: The analysis indicates no significant interaction effect of the treatment and time on the ", dependent_var, " variable."
+  )
+}
+
+  cat("\n\n")
+  cat(message)
+  
+  rm(coefficients, beta_0, beta_1, beta_2, beta_3, 
+     control_before, control_after, treated_before, treated_after, 
+     param_table, message)
+}
+```
+
+
+
+

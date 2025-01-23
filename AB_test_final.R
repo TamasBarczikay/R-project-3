@@ -7,7 +7,7 @@ library(plm)  # For fixed effects and random effects models
 ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### ##### 
 ##### Preset variable values
 n <- 200
-case <- "case_3"
+case <- "case_1"
 required_significance <- 0.05
 dependent_var <- "crd_spent"
 use_fe <- FALSE  # Set to TRUE to use Fixed Effects, FALSE to use Random Effects
